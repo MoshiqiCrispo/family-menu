@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="家庭菜谱">
+<meta name="theme-color" content="#4caf7d">
+<title>家庭菜谱</title>
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <header class="app-header">
+    <div style="display:flex;align-items:center;gap:8px">
+      <h1 id="page-title" style="margin:0">🍳 家庭菜谱</h1>
+      <div id="sync-indicator" style="font-size:11px;white-space:nowrap"></div>
+    </div>
+    <div style="display:flex;gap:4px">
+      <button class="header-action" onclick="openSettings()" title="设置">⚙️</button>
+      <button class="header-action" id="header-btn" onclick="fabAction()" title="添加">＋</button>
+    </div>
+  </header>
+
+  <!-- Pages -->
+  <div class="pages">
+
+    <!-- ===== 菜品页 ===== -->
+    <div class="page active" id="page-dishes">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="search" id="dish-search" placeholder="搜索菜名或食材…" autocomplete="off">
+      </div>
+      <div class="chips" id="dish-chips"></div>
+      <div id="dish-list"></div>
+    </div>
+
+    <!-- ===== 食材页 ===== -->
+    <div class="page" id="page-ingredients">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="search" id="ing-search" placeholder="搜索食材…" autocomplete="off">
+      </div>
+      <div class="chips" id="ing-chips"></div>
+      <div id="ing-list"></div>
+    </div>
+
+    <!-- ===== 快捷页 ===== -->
+    <div class="page" id="page-quick">
+      <div id="quick-content"></div>
+    </div>
+
+  </div><!-- /pages -->
+
+  <!-- Tab Bar -->
+  <nav class="tab-bar">
+    <button class="tab-item active" data-tab="dishes">
+      <span class="tab-icon">🍳</span>菜品库
+    </button>
+    <button class="tab-item" data-tab="ingredients">
+      <span class="tab-icon">🛒</span>食材
+    </button>
+    <button class="tab-item" data-tab="quick">
+      <span class="tab-icon">⚡</span>快捷
+    </button>
+  </nav>
+
+</div><!-- /app -->
+
+<!-- FAB -->
+<button class="fab" id="fab" onclick="fabAction()">＋</button>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- ===== Modal: 添加/编辑菜品 ===== -->
+<div class="modal-overlay" id="modal-dish">
+  <div class="modal-sheet">
+    <div class="modal-title">
+      <span id="modal-dish-title">添加菜品</span>
+      <button class="modal-close" onclick="closeModal('modal-dish')">✕</button>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">菜品名称 *</label>
+      <input class="form-input" id="dish-name-input" type="text" placeholder="例：西红柿炒鸡蛋" maxlength="30" autocomplete="off">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">分类</label>
+      <div class="cat-select-row">
+        <button class="cat-opt selected" data-cat="荤菜">🥩 荤菜</button>
+        <button class="cat-opt" data-cat="素菜">🥦 素菜</button>
+        <button class="cat-opt" data-cat="汤类">🍲 汤类</button>
+        <button class="cat-opt" data-cat="凉菜">🥗 凉菜</button>
+        <button class="cat-opt" data-cat="其他">其他</button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">所需食材</label>
+      <input class="form-input" id="dish-ingredients-input" type="text" placeholder="例：西红柿、鸡蛋、葱、盐" autocomplete="off">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">备注/小贴士</label>
+      <textarea class="form-textarea" id="dish-note-input" placeholder="烹饪小技巧、口味偏好…"></textarea>
+    </div>
+
+    <button class="btn-primary" onclick="saveDish()">保存菜品</button>
+  </div>
+</div>
+
+<!-- ===== Modal: 添加食材 ===== -->
+<div class="modal-overlay" id="modal-ing">
+  <div class="modal-sheet">
+    <div class="modal-title">
+      <span>添加食材</span>
+      <button class="modal-close" onclick="closeModal('modal-ing')">✕</button>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">食材名称 *</label>
+      <input class="form-input" id="ing-name-input" type="text" placeholder="例：鸡蛋" maxlength="20" autocomplete="off">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">当前状态</label>
+      <div class="status-select-row">
+        <button class="status-opt s-have selected" data-status="have">✅ 有货</button>
+        <button class="status-opt s-low" data-status="low">⚠️ 快没了</button>
+        <button class="status-opt s-out" data-status="out">❌ 用完了</button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">备注</label>
+      <input class="form-input" id="ing-note-input" type="text" placeholder="例：冰箱第二格" autocomplete="off" maxlength="30">
+    </div>
+
+    <button class="btn-primary" onclick="saveIng()">添加食材</button>
+  </div>
+</div>
+
+<!-- ===== Modal: 设置 ===== -->
+<div class="modal-overlay" id="modal-settings">
+  <div class="modal-sheet">
+    <div class="modal-title">
+      <span>⚙️ 同步设置</span>
+      <button class="modal-close" onclick="closeModal('modal-settings')">✕</button>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">服务器地址</label>
+      <input class="form-input" id="settings-api" type="url" placeholder="https://xxx.up.railway.app" autocomplete="off">
+      <div style="font-size:11px;color:#9eaaa0;margin-top:4px">同源部署时留空即可自动检测；跨域时填写后端地址</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">分享码</label>
+      <input class="form-input" id="settings-code" type="text" placeholder="family2024" autocomplete="off" maxlength="20">
+      <div style="font-size:11px;color:#9eaaa0;margin-top:4px">两台手机填相同的分享码即可同步</div>
+    </div>
+
+    <button class="btn-primary" id="btn-save-settings">💾 保存设置并同步</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
