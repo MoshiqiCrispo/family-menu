@@ -22,21 +22,43 @@ let syncStatus = 'offline';
 async function autoDetectServer() {
   // 已有有效服务器地址则不自动检测
   if (syncConfig.apiBase) return;
-  try {
-    const res = await fetch('/api/health', {
-      headers: { 'X-Share-Code': syncConfig.shareCode || 'family2024' }
-    });
-    if (res.ok) {
-      syncConfig.apiBase = window.location.origin;
-      localStorage.setItem(CFG_KEY, JSON.stringify(syncConfig));
-      updateSyncIndicator();
-      const changed = await syncPull();
-      if (changed) {
-        renderDishes(); renderIngredients(); renderQuick();
+
+  // 重试 3 次（间隔 2s / 4s / 8s），应对 VPN / 弱网环境
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch('/api/health', {
+        headers: { 'X-Share-Code': syncConfig.shareCode || 'family2024' },
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        syncConfig.apiBase = window.location.origin;
+        localStorage.setItem(CFG_KEY, JSON.stringify(syncConfig));
+        updateSyncIndicator();
+        const changed = await syncPull();
+        if (changed) {
+          renderDishes(); renderIngredients(); renderQuick();
+        }
+        showToast('已自动连接云端 ☁️');
+        return; // 成功，退出
       }
-      showToast('已自动连接云端 ☁️');
+      // 非 200 响应（不太可能发生，但兜底）
+      console.warn(`自动检测第 ${attempt} 次: 服务器返回 ${res.status}`);
+    } catch(e) {
+      console.warn(`自动检测第 ${attempt}/3 次失败: ${e.message}`);
     }
-  } catch(e) { /* 当前域名无后端服务，保持离线模式 */ }
+    // 最后一次不等待
+    if (attempt < 3) {
+      await new Promise(r => setTimeout(r, attempt * 2000));
+    }
+  }
+
+  // 全部重试失败，显示提示
+  updateSyncIndicator();
+  showToast('⚠️ 未检测到云端服务，可点右上角 ⚙️ 手动配置', 4000);
 }
 
 // ===== State =====
@@ -263,7 +285,7 @@ function updateSyncIndicator() {
   const el = document.getElementById('sync-indicator');
   if (!el) return;
   if (!syncConfig.apiBase) {
-    el.innerHTML = '<span style="color:#9eaaa0">☁️ 未配置</span>';
+    el.innerHTML = '<span style="color:#f44336;cursor:pointer;text-decoration:underline" onclick="openSettings()" title="点击配置云同步">⚠️ 未连接</span>';
     return;
   }
   const map = {
