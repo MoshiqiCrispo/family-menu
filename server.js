@@ -13,6 +13,15 @@ const DB_PATH = path.join(DATA_DIR, 'db.json');
 
 app.use(express.json({ limit: '2mb' }));
 
+// CORS — 允许跨域访问（CloudStudio 等前端托管平台需要）
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, X-Share-Code');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 // 静态文件 — 提供前端页面（与后端同源部署）
 app.use(express.static(__dirname));
 
