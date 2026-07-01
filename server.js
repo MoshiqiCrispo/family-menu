@@ -20,12 +20,12 @@ app.use(express.static(__dirname));
 function readDB() {
   try {
     if (!fs.existsSync(DB_PATH)) {
-      return { dishes: [], ingredients: [], nextDishId: 1, nextIngId: 1, updatedAt: new Date().toISOString() };
+      return { dishes: [], ingredients: [], nextDishId: 1, nextIngId: 1, deletedIds: [], updatedAt: new Date().toISOString() };
     }
     return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
   } catch (e) {
     console.error('读取数据库失败:', e.message);
-    return { dishes: [], ingredients: [], nextDishId: 1, nextIngId: 1, updatedAt: new Date().toISOString() };
+    return { dishes: [], ingredients: [], nextDishId: 1, nextIngId: 1, deletedIds: [], updatedAt: new Date().toISOString() };
   }
 }
 
@@ -83,7 +83,8 @@ app.post('/api/data', (req, res) => {
     dishes: Array.isArray(incoming.dishes) ? incoming.dishes : [],
     ingredients: Array.isArray(incoming.ingredients) ? incoming.ingredients : [],
     nextDishId: incoming.nextDishId || 1,
-    nextIngId: incoming.nextIngId || 1
+    nextIngId: incoming.nextIngId || 1,
+    deletedIds: Array.isArray(incoming.deletedIds) ? incoming.deletedIds : []
   };
   writeDB(merged);
   res.json({ ok: true, updatedAt: new Date().toISOString() });

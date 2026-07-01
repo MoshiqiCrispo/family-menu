@@ -20,8 +20,8 @@ let syncStatus = 'offline';
 // 部署到 Railway 等平台后，前端和后端在同一域名下
 // 首次访问时自动检测 /api/health，若存在则自动配置，无需手动填写
 async function autoDetectServer() {
-  // 已有保存的配置则不自动检测
-  if (localStorage.getItem(CFG_KEY) !== null) return;
+  // 已有有效服务器地址则不自动检测
+  if (syncConfig.apiBase) return;
   try {
     const res = await fetch('/api/health', {
       headers: { 'X-Share-Code': syncConfig.shareCode || 'family2024' }
@@ -49,20 +49,21 @@ function loadData() {
   } catch(e) {}
   return {
     dishes: [
-      { id: 1, name: '西红柿炒鸡蛋', cat: '荤菜', ingredients: '西红柿、鸡蛋、葱、盐、糖', note: '少放盐多放糖更好吃' },
-      { id: 2, name: '清炒时蔬', cat: '素菜', ingredients: '青菜、大蒜、盐、油', note: '' },
-      { id: 3, name: '冬瓜排骨汤', cat: '汤类', ingredients: '冬瓜、排骨、姜、盐', note: '先焯水去腥' },
-      { id: 4, name: '凉拌黄瓜', cat: '凉菜', ingredients: '黄瓜、大蒜、辣椒、醋、香油', note: '夏天必备' },
+      { id: 1, name: '西红柿炒鸡蛋', cat: '荤菜', ingredients: '西红柿、鸡蛋、葱、盐、糖', note: '少放盐多放糖更好吃', updatedAt: Date.now() },
+      { id: 2, name: '清炒时蔬', cat: '素菜', ingredients: '青菜、大蒜、盐、油', note: '', updatedAt: Date.now() },
+      { id: 3, name: '冬瓜排骨汤', cat: '汤类', ingredients: '冬瓜、排骨、姜、盐', note: '先焯水去腥', updatedAt: Date.now() },
+      { id: 4, name: '凉拌黄瓜', cat: '凉菜', ingredients: '黄瓜、大蒜、辣椒、醋、香油', note: '夏天必备', updatedAt: Date.now() },
     ],
     ingredients: [
-      { id: 1, name: '鸡蛋', status: 'have', note: '冰箱里' },
-      { id: 2, name: '西红柿', status: 'low', note: '只剩2个' },
-      { id: 3, name: '青菜', status: 'have', note: '' },
-      { id: 4, name: '大蒜', status: 'have', note: '' },
-      { id: 5, name: '排骨', status: 'out', note: '需要买' },
+      { id: 1, name: '鸡蛋', status: 'have', note: '冰箱里', updatedAt: Date.now() },
+      { id: 2, name: '西红柿', status: 'low', note: '只剩2个', updatedAt: Date.now() },
+      { id: 3, name: '青菜', status: 'have', note: '', updatedAt: Date.now() },
+      { id: 4, name: '大蒜', status: 'have', note: '', updatedAt: Date.now() },
+      { id: 5, name: '排骨', status: 'out', note: '需要买', updatedAt: Date.now() },
     ],
     nextDishId: 5,
-    nextIngId: 6
+    nextIngId: 6,
+    deletedIds: []
   };
 }
 
@@ -73,12 +74,15 @@ function saveData() {
 
 let state = loadData();
 
-// ===== 云端同步 =====
+// ===== 云端同步（改进版：拉取→合并→推送）=====
 let syncTimer = null;
+let pollTimer = null;
+let isSyncing = false;
+
 function scheduleSync() {
   if (!syncConfig.apiBase) return;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(syncPush, 600);
+  syncTimer = setTimeout(() => syncPush(), 600);
 }
 
 async function apiFetch(path, options = {}) {
@@ -96,43 +100,154 @@ async function apiFetch(path, options = {}) {
   return res.json();
 }
 
+// 合并数据：以 ID 为 key 做并集
+// - 在 deletedIds 中的项目：跳过（已删除）
+// - 两边都有：保留 updatedAt 更新的版本
+// - 只有一边：保留
+function mergeData(local, remote) {
+  const deletedIds = new Set([
+    ...(local.deletedIds || []),
+    ...(remote.deletedIds || [])
+  ]);
+
+  const dishMap = new Map();
+  const ingMap = new Map();
+
+  // 先放远程数据
+  (remote.dishes || []).forEach(d => {
+    if (!deletedIds.has(d.id)) dishMap.set(d.id, d);
+  });
+  (remote.ingredients || []).forEach(i => {
+    if (!deletedIds.has(i.id)) ingMap.set(i.id, i);
+  });
+
+  // 再用本地数据覆盖（updatedAt 更新的优先）
+  (local.dishes || []).forEach(d => {
+    if (!deletedIds.has(d.id)) {
+      const existing = dishMap.get(d.id);
+      if (!existing || (d.updatedAt || 0) >= (existing.updatedAt || 0)) {
+        dishMap.set(d.id, d);
+      }
+    }
+  });
+  (local.ingredients || []).forEach(i => {
+    if (!deletedIds.has(i.id)) {
+      const existing = ingMap.get(i.id);
+      if (!existing || (i.updatedAt || 0) >= (existing.updatedAt || 0)) {
+        ingMap.set(i.id, i);
+      }
+    }
+  });
+
+  return {
+    dishes: Array.from(dishMap.values()),
+    ingredients: Array.from(ingMap.values()),
+    nextDishId: Math.max(local.nextDishId || 1, remote.nextDishId || 1),
+    nextIngId: Math.max(local.nextIngId || 1, remote.nextIngId || 1),
+    deletedIds: Array.from(deletedIds)
+  };
+}
+
+// 检查是否有模态框打开（避免同步时打断编辑）
+function isModalOpen() {
+  return !!document.querySelector('.modal-overlay.open');
+}
+
+// 同步后重新渲染当前页面
+function rerenderCurrentTab() {
+  if (isModalOpen()) return;
+  if (currentTab === 'dishes') renderDishes();
+  else if (currentTab === 'ingredients') renderIngredients();
+  else if (currentTab === 'quick') renderQuick();
+}
+
 async function syncPush() {
-  if (!syncConfig.apiBase) return;
+  if (!syncConfig.apiBase || isSyncing) return;
+  isSyncing = true;
   setSyncStatus('syncing');
   try {
-    const payload = {
-      dishes: state.dishes,
-      ingredients: state.ingredients,
-      nextDishId: state.nextDishId,
-      nextIngId: state.nextIngId
-    };
-    await apiFetch('/api/data', { method: 'POST', body: JSON.stringify(payload) });
+    // 1. 先拉取服务器最新数据
+    let remote;
+    try {
+      remote = await apiFetch('/api/data');
+    } catch(e) {
+      remote = { dishes: [], ingredients: [], nextDishId: 1, nextIngId: 1, deletedIds: [] };
+    }
+
+    // 2. 合并本地和远程
+    const merged = mergeData(state, remote);
+
+    // 3. 更新本地状态
+    state.dishes = merged.dishes;
+    state.ingredients = merged.ingredients;
+    state.nextDishId = merged.nextDishId;
+    state.nextIngId = merged.nextIngId;
+    state.deletedIds = merged.deletedIds;
+    saveDataSilent();
+
+    // 4. 推送合并后的数据到服务器
+    await apiFetch('/api/data', { method: 'POST', body: JSON.stringify(merged) });
+
     setSyncStatus('done');
+    rerenderCurrentTab();
   } catch(e) {
     console.warn('同步推送失败:', e.message);
     setSyncStatus('error');
+  } finally {
+    isSyncing = false;
   }
 }
 
 async function syncPull() {
-  if (!syncConfig.apiBase) return;
+  if (!syncConfig.apiBase || isSyncing) return false;
+  isSyncing = true;
   setSyncStatus('syncing');
   try {
     const remote = await apiFetch('/api/data');
-    if (!remote || !remote.dishes) return;
-    // 简单合并：服务端数据直接覆盖（以服务端为准）
-    state.dishes = remote.dishes;
-    state.ingredients = remote.ingredients;
-    state.nextDishId = remote.nextDishId || state.nextDishId;
-    state.nextIngId = remote.nextIngId || state.nextIngId;
+    if (!remote || !remote.dishes) { isSyncing = false; return false; }
+
+    // 合并远程数据到本地
+    const merged = mergeData(state, remote);
+
+    // 检查是否有变化
+    const changed = JSON.stringify(merged.dishes) !== JSON.stringify(state.dishes) ||
+                    JSON.stringify(merged.ingredients) !== JSON.stringify(state.ingredients);
+
+    state.dishes = merged.dishes;
+    state.ingredients = merged.ingredients;
+    state.nextDishId = merged.nextDishId;
+    state.nextIngId = merged.nextIngId;
+    state.deletedIds = merged.deletedIds;
     saveDataSilent();
+
+    // 如果合并后有变化，推送一次让服务器也有完整数据
+    if (changed) {
+      try {
+        await apiFetch('/api/data', { method: 'POST', body: JSON.stringify(merged) });
+      } catch(e) { /* 推送失败不影响拉取 */ }
+    }
+
     setSyncStatus('done');
-    return true;
+    return changed;
   } catch(e) {
     console.warn('同步拉取失败:', e.message);
     setSyncStatus('error');
     return false;
+  } finally {
+    isSyncing = false;
   }
+}
+
+// 定期轮询（每 10 秒检查一次服务器更新）
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    if (!syncConfig.apiBase || document.hidden || isSyncing) return;
+    const changed = await syncPull();
+    if (changed) {
+      rerenderCurrentTab();
+    }
+  }, 10000);
 }
 
 function saveDataSilent() {
@@ -300,6 +415,7 @@ function cycleIngStatus(id) {
   if (!i) return;
   const order = ['have', 'low', 'out'];
   i.status = order[(order.indexOf(i.status) + 1) % 3];
+  i.updatedAt = Date.now();
   saveData();
   renderIngredients();
   showToast(`${i.name} → ${statusText(i.status)}`);
@@ -310,6 +426,8 @@ function deleteIng(id) {
   if (!i) return;
   if (!confirm(`删除食材「${i.name}」？`)) return;
   state.ingredients = state.ingredients.filter(x => x.id !== id);
+  if (!state.deletedIds) state.deletedIds = [];
+  state.deletedIds.push(id);
   saveData();
   renderIngredients();
   showToast('已删除');
@@ -422,10 +540,10 @@ function saveDish() {
 
   if (editingDishId !== null) {
     const d = state.dishes.find(x => x.id === editingDishId);
-    if (d) { d.name = name; d.cat = cat; d.ingredients = ingredients; d.note = note; }
+    if (d) { d.name = name; d.cat = cat; d.ingredients = ingredients; d.note = note; d.updatedAt = Date.now(); }
     showToast('已保存');
   } else {
-    state.dishes.push({ id: genDishId(), name, cat, ingredients, note });
+    state.dishes.push({ id: genDishId(), name, cat, ingredients, note, updatedAt: Date.now() });
     showToast('菜品已添加 🎉');
   }
   saveData();
@@ -438,6 +556,8 @@ function deleteDish(id) {
   if (!d) return;
   if (!confirm(`删除菜品「${d.name}」？`)) return;
   state.dishes = state.dishes.filter(x => x.id !== id);
+  if (!state.deletedIds) state.deletedIds = [];
+  state.deletedIds.push(id);
   saveData();
   renderDishes();
   showToast('已删除');
@@ -462,7 +582,7 @@ function saveIng() {
   if (!name) { showToast('请输入食材名称'); return; }
   const status = document.querySelector('.status-opt.selected')?.dataset.status || 'have';
   const note   = document.getElementById('ing-note-input').value.trim();
-  state.ingredients.push({ id: genIngId(), name, status, note });
+  state.ingredients.push({ id: genIngId(), name, status, note, updatedAt: Date.now() });
   saveData();
   closeModal('modal-ing');
   renderIngredients();
@@ -563,21 +683,23 @@ document.addEventListener('DOMContentLoaded', () => {
         showToast('已同步最新数据 ☁️');
       }
     });
+    startPolling();
   } else {
     // 首次访问时尝试同源自动检测（Railway 等同源部署场景）
-    autoDetectServer();
+    autoDetectServer().then(() => {
+      if (syncConfig.apiBase) startPolling();
+    });
   }
 
-  // 页面激活时（从后台切回）自动拉取一次
+  // 页面激活时（从后台切回）自动拉取一次 + 重启轮询
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && syncConfig.apiBase) {
       syncPull().then(changed => {
         if (changed) {
-          if (currentTab === 'dishes') renderDishes();
-          else if (currentTab === 'ingredients') renderIngredients();
-          else if (currentTab === 'quick') renderQuick();
+          rerenderCurrentTab();
         }
       });
+      startPolling();
     }
   });
 });
