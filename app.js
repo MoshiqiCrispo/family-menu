@@ -19,9 +19,11 @@ let syncStatus = 'offline';
 // ===== 同源自动检测 =====
 // 部署到 Railway 等平台后，前端和后端在同一域名下
 // 首次访问时自动检测 /api/health，若存在则自动配置，无需手动填写
-async function autoDetectServer() {
+async function autoDetectServer(opts = {}) {
   // 已有有效服务器地址则不自动检测
-  if (syncConfig.apiBase) return;
+  if (syncConfig.apiBase) return true;
+
+  const { silent = false } = opts;
 
   // 重试 3 次（间隔 2s / 4s / 8s），应对 VPN / 弱网环境
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -42,23 +44,22 @@ async function autoDetectServer() {
         if (changed) {
           renderDishes(); renderIngredients(); renderQuick();
         }
-        showToast('已自动连接云端 ☁️');
-        return; // 成功，退出
+        if (!silent) showToast('已自动连接云端 ☁️');
+        return true;
       }
-      // 非 200 响应（不太可能发生，但兜底）
       console.warn(`自动检测第 ${attempt} 次: 服务器返回 ${res.status}`);
     } catch(e) {
       console.warn(`自动检测第 ${attempt}/3 次失败: ${e.message}`);
     }
-    // 最后一次不等待
     if (attempt < 3) {
       await new Promise(r => setTimeout(r, attempt * 2000));
     }
   }
 
-  // 全部重试失败，显示提示
+  // 全部重试失败
   updateSyncIndicator();
-  showToast('⚠️ 未检测到云端服务，可点右上角 ⚙️ 手动配置', 4000);
+  if (!silent) showToast('⚠️ 未检测到云端服务，可点右上角 ⚙️ 手动配置', 4000);
+  return false;
 }
 
 // ===== State =====
@@ -618,20 +619,44 @@ function openSettings() {
   openModal('modal-settings');
 }
 
-function saveSettings() {
-  const apiBase = document.getElementById('settings-api').value.trim();
+async function saveSettings() {
+  let apiBase = document.getElementById('settings-api').value.trim();
   const shareCode = document.getElementById('settings-code').value.trim() || 'family2024';
+  const hintEl = document.getElementById('settings-hint');
+
+  // 先保存分享码（即使服务器地址暂时为空）
   saveConfig({ apiBase, shareCode });
+
+  // 未填服务器地址 → 立即尝试同源自动检测
+  if (!apiBase) {
+    hintEl.innerHTML = '<span style="color:#4caf7d">🔄 正在自动检测云端服务…</span>';
+    hintEl.style.display = 'block';
+    const detected = await autoDetectServer({ silent: true });
+    apiBase = syncConfig.apiBase; // autoDetectServer 成功后已写入 syncConfig
+    if (!apiBase) {
+      // 自动检测失败，保留设置弹窗提示手动填写
+      hintEl.innerHTML = '<span style="color:#f44336">⚠️ 未检测到云端服务，请在下方手动填写服务器地址（如 https://family-menu-production-d8aa.up.railway.app）</span>';
+      hintEl.style.display = 'block';
+      updateSyncIndicator();
+      return; // 不关闭弹窗，让用户手动填
+    }
+  }
+
+  // 此时 apiBase 一定有值
+  hintEl.innerHTML = '';
+  hintEl.style.display = 'none';
   closeModal('modal-settings');
   updateSyncIndicator();
-  if (apiBase) {
-    showToast('配置已保存，正在同步…', 2500);
-    syncPull().then(changed => {
-      if (changed) { renderDishes(); renderIngredients(); renderQuick(); }
-    });
-  } else {
-    showToast('已切换到离线模式');
-  }
+  showToast('配置已保存，正在同步…', 2500);
+  syncPull().then(changed => {
+    if (changed) {
+      renderDishes(); renderIngredients(); renderQuick();
+      showToast('已同步最新数据 ✅');
+    } else {
+      showToast('已连接，数据已是最新 ☁️');
+    }
+  });
+  startPolling();
 }
 
 // ===== Modal helpers =====
