@@ -18,7 +18,7 @@ let syncStatus = 'offline';
 
 // ===== 同源自动检测 =====
 // 部署到 Railway 等平台后，前端和后端在同一域名下
-// 首次访问时自动检测 /api/health，若存在则自动配置，无需手动填写
+// 单次快速检测（5秒超时），手机 VPN 环境下不反复重试
 async function autoDetectServer(opts = {}) {
   const { silent = false, force = false } = opts;
 
@@ -32,40 +32,32 @@ async function autoDetectServer(opts = {}) {
     updateSyncIndicator();
   }
 
-  // 重试 3 次（间隔 2s / 4s / 8s），应对 VPN / 弱网环境
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch('/api/health', {
-        headers: { 'X-Share-Code': syncConfig.shareCode || 'family2024' },
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch('/api/health', {
+      headers: { 'X-Share-Code': syncConfig.shareCode || 'family2024' },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
 
-      if (res.ok) {
-        syncConfig.apiBase = window.location.origin;
-        localStorage.setItem(CFG_KEY, JSON.stringify(syncConfig));
-        updateSyncIndicator();
-        const changed = await syncPull();
-        if (changed) {
-          renderDishes(); renderIngredients(); renderQuick();
-        }
-        if (!silent) showToast('已自动连接云端 ☁️');
-        return true;
+    if (res.ok) {
+      syncConfig.apiBase = window.location.origin;
+      localStorage.setItem(CFG_KEY, JSON.stringify(syncConfig));
+      updateSyncIndicator();
+      const changed = await syncPull();
+      if (changed) {
+        renderDishes(); renderIngredients(); renderQuick();
       }
-      console.warn(`自动检测第 ${attempt} 次: 服务器返回 ${res.status}`);
-    } catch(e) {
-      console.warn(`自动检测第 ${attempt}/3 次失败: ${e.message}`);
+      if (!silent) showToast('已自动连接云端 ☁️');
+      return true;
     }
-    if (attempt < 3) {
-      await new Promise(r => setTimeout(r, attempt * 2000));
-    }
+  } catch(e) {
+    // 手机 VPN 环境下 fetch 可能超时或失败，静默处理
   }
 
-  // 全部重试失败
   updateSyncIndicator();
-  if (!silent) showToast('⚠️ 未检测到云端服务，可点右上角 ⚙️ 手动配置', 4000);
+  if (!silent) showToast('⚠️ 自动检测失败，请手动填写服务器地址', 4000);
   return false;
 }
 
@@ -634,18 +626,17 @@ async function saveSettings() {
   // 先保存分享码（即使服务器地址暂时为空）
   saveConfig({ apiBase, shareCode });
 
-  // 未填服务器地址 → 立即尝试同源自动检测
+  // 未填服务器地址 → 快速尝试同源自动检测（5秒超时）
   if (!apiBase) {
-    hintEl.innerHTML = '<span style="color:#4caf7d">🔄 正在自动检测云端服务…</span>';
+    hintEl.innerHTML = '<span style="color:#4caf7d">🔄 正在自动检测（约5秒）…</span> <button onclick="skipDetection()" style="padding:4px 12px;background:#f0f0f0;border:1px solid #ccc;border-radius:4px;font-size:12px;cursor:pointer">跳过</button>';
     hintEl.style.display = 'block';
     const detected = await autoDetectServer({ silent: true });
-    apiBase = syncConfig.apiBase; // autoDetectServer 成功后已写入 syncConfig
+    apiBase = syncConfig.apiBase;
     if (!apiBase) {
-      // 自动检测失败，保留设置弹窗提示手动填写
-      hintEl.innerHTML = '<span style="color:#f44336">⚠️ 未检测到云端服务，请在下方手动填写服务器地址（如 https://family-menu-production-d8aa.up.railway.app）</span>';
+      hintEl.innerHTML = '<span style="color:#f44336">⚠️ 未检测到，请在下方填写 https://family-menu-production-d8aa.up.railway.app 然后保存</span>';
       hintEl.style.display = 'block';
       updateSyncIndicator();
-      return; // 不关闭弹窗，让用户手动填
+      return;
     }
   }
 
@@ -667,37 +658,45 @@ async function saveSettings() {
 }
 
 async function resetSyncSettings() {
-  if (!confirm('确定要重置同步设置吗？\n\n这将清除服务器地址和分享码，然后重新自动检测云端服务。\n\n菜品和食材数据不会丢失。')) return;
+  if (!confirm('确定要重置同步设置吗？\n\n将清除旧的服务器配置，尝试自动检测云端。\n\n（菜品和食材数据不会丢失）')) return;
 
-  // 清除同步配置
+  // 立即清除配置
   syncConfig = { apiBase: '', shareCode: 'family2024' };
   localStorage.removeItem(CFG_KEY);
   syncStatus = 'offline';
+  updateSyncIndicator();
 
-  // 更新设置面板
   document.getElementById('settings-api').value = '';
   document.getElementById('settings-code').value = 'family2024';
-
-  // 显示检测中
   const hintEl = document.getElementById('settings-hint');
-  hintEl.innerHTML = '<span style="color:#4caf7d">🔄 正在自动检测云端服务…</span>';
+  hintEl.innerHTML = '<span style="color:#4caf7d">🔄 正在自动检测（约5秒）…</span> <button onclick="skipDetection()" style="padding:4px 12px;background:#f0f0f0;border:1px solid #ccc;border-radius:4px;font-size:12px;cursor:pointer">跳过</button>';
   hintEl.style.display = 'block';
 
-  // 强制重新检测
+  // 快速检测（单次5秒）
   const detected = await autoDetectServer({ force: true, silent: true });
   if (detected) {
-    hintEl.innerHTML = '<span style="color:#4caf7d">✅ 已自动连接云端！分享码: family2024</span>';
+    document.getElementById('settings-api').value = syncConfig.apiBase;
+    hintEl.innerHTML = '<span style="color:#4caf7d">✅ 已自动连接云端！</span>';
     closeModal('modal-settings');
     showToast('已重置并自动连接云端 ☁️');
     startPolling();
-    // 拉取一次云端数据
     syncPull().then(changed => {
       if (changed) { renderDishes(); renderIngredients(); renderQuick(); }
     });
   } else {
-    hintEl.innerHTML = '<span style="color:#f44336">⚠️ 当前域名未检测到云端服务。如果你在 Railway 上，请确保开启了 VPN。也可以手动填写服务器地址。</span>';
-    updateSyncIndicator();
+    hintEl.innerHTML = '<span style="color:#f44336">⚠️ 未检测到。VPN 开了吗？手动填写下方地址后保存</span>';
+    if (!document.getElementById('settings-api').value) {
+      document.getElementById('settings-api').value = window.location.origin || '';
+    }
   }
+}
+
+// 跳过检测，让用户手动填
+function skipDetection() {
+  var hintEl = document.getElementById('settings-hint');
+  hintEl.innerHTML = '<span style="color:#9eaaa0">📝 请在下方填写服务器地址后点击保存</span>';
+  var apiInput = document.getElementById('settings-api');
+  if (!apiInput.value) apiInput.value = window.location.origin || '';
 }
 
 // ===== Modal helpers =====
