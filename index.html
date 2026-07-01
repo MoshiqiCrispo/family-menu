@@ -9,8 +9,8 @@
 <meta name="apple-mobile-web-app-title" content="家庭菜谱">
 <meta name="theme-color" content="#4caf7d">
 <title>家庭菜谱</title>
-<link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="app.css">
+<link rel="manifest" href="manifest.json?v=2">
+<link rel="stylesheet" href="app.css?v=2">
 </head>
 <body>
 <div id="app">
@@ -169,10 +169,14 @@
 
     <div id="settings-hint" style="display:none;margin-bottom:12px;font-size:13px;line-height:1.5"></div>
 
-    <button class="btn-primary" id="btn-save-settings">💾 保存设置并同步</button>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="btn-primary" id="btn-save-settings" style="flex:2" onclick="saveSettings()">💾 保存设置并同步</button>
+      <button class="btn-secondary" style="flex:1;font-size:13px" onclick="resetSyncSettings()">🔄 重置</button>
+    </div>
+    <div style="font-size:11px;color:#9eaaa0;text-align:center">「重置」会清除所有同步配置，重新自动检测云端</div>
   </div>
 </div>
 
-<script src="app.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

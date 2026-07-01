@@ -20,10 +20,17 @@ let syncStatus = 'offline';
 // 部署到 Railway 等平台后，前端和后端在同一域名下
 // 首次访问时自动检测 /api/health，若存在则自动配置，无需手动填写
 async function autoDetectServer(opts = {}) {
-  // 已有有效服务器地址则不自动检测
-  if (syncConfig.apiBase) return true;
+  const { silent = false, force = false } = opts;
 
-  const { silent = false } = opts;
+  // 没有强制检测且已有有效地址则跳过
+  if (!force && syncConfig.apiBase) return true;
+
+  // 重置为未检测状态
+  if (force) {
+    syncConfig.apiBase = '';
+    localStorage.removeItem(CFG_KEY);
+    updateSyncIndicator();
+  }
 
   // 重试 3 次（间隔 2s / 4s / 8s），应对 VPN / 弱网环境
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -659,6 +666,40 @@ async function saveSettings() {
   startPolling();
 }
 
+async function resetSyncSettings() {
+  if (!confirm('确定要重置同步设置吗？\n\n这将清除服务器地址和分享码，然后重新自动检测云端服务。\n\n菜品和食材数据不会丢失。')) return;
+
+  // 清除同步配置
+  syncConfig = { apiBase: '', shareCode: 'family2024' };
+  localStorage.removeItem(CFG_KEY);
+  syncStatus = 'offline';
+
+  // 更新设置面板
+  document.getElementById('settings-api').value = '';
+  document.getElementById('settings-code').value = 'family2024';
+
+  // 显示检测中
+  const hintEl = document.getElementById('settings-hint');
+  hintEl.innerHTML = '<span style="color:#4caf7d">🔄 正在自动检测云端服务…</span>';
+  hintEl.style.display = 'block';
+
+  // 强制重新检测
+  const detected = await autoDetectServer({ force: true, silent: true });
+  if (detected) {
+    hintEl.innerHTML = '<span style="color:#4caf7d">✅ 已自动连接云端！分享码: family2024</span>';
+    closeModal('modal-settings');
+    showToast('已重置并自动连接云端 ☁️');
+    startPolling();
+    // 拉取一次云端数据
+    syncPull().then(changed => {
+      if (changed) { renderDishes(); renderIngredients(); renderQuick(); }
+    });
+  } else {
+    hintEl.innerHTML = '<span style="color:#f44336">⚠️ 当前域名未检测到云端服务。如果你在 Railway 上，请确保开启了 VPN。也可以手动填写服务器地址。</span>';
+    updateSyncIndicator();
+  }
+}
+
 // ===== Modal helpers =====
 function openModal(id) {
   document.getElementById(id).classList.add('open');
@@ -729,8 +770,12 @@ document.addEventListener('DOMContentLoaded', () => {
         renderQuick();
         showToast('已同步最新数据 ☁️');
       }
+      startPolling();
+    }).catch(() => {
+      // 旧配置可能失效了，提示用户重置
+      updateSyncIndicator();
+      showToast('⚠️ 服务器连接失败，可进设置点「重置」重新检测', 4000);
     });
-    startPolling();
   } else {
     // 首次访问时尝试同源自动检测（Railway 等同源部署场景）
     autoDetectServer().then(() => {
